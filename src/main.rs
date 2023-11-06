@@ -1,216 +1,96 @@
-use crossterm::event::{
-    poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers,
+use crossterm::{
+    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType};
+use futures::{future::FutureExt, select, StreamExt};
+use futures_timer::Delay;
 use rosrust;
 use rosrust_msg;
-use rosrust_msg::geometry_msgs::{Twist, Vector3};
-use std::process::exit;
+use rosrust_msg::geometry_msgs::Twist;
 use std::time::Duration;
 
-fn main() {
+fn main() -> std::io::Result<()> {
     rosrust::init("key_reader");
-    enable_raw_mode().unwrap();
+    enable_raw_mode()?;
 
+    // let mut stdout = stdout();
+    // execute!(stdout, EnableMouseCapture)?;
+
+    async_std::task::block_on(print_events());
+
+    // execute!(stdout, DisableMouseCapture)?;
+
+    disable_raw_mode()
+}
+
+async fn print_events() {
     let cmd_vel_pub = rosrust::publish("cmd_vel", 10).unwrap();
     cmd_vel_pub.wait_for_subscribers(None).unwrap();
 
-    let mut vel_msg = rosrust_msg::geometry_msgs::Twist::default();
     let linear_speed = 0.5;
-    let angular_speed = 0.3;
+    let angular_speed = 0.5;
+
+    let mut reader = EventStream::new();
 
     while rosrust::is_ok() {
-        if poll(Duration::from_millis(200)).unwrap() {
-            // It's guaranteed that the `read()` won't block when the `poll()`
-            // function returns `true`
-            match read().unwrap() {
-                Event::Key(event) => println!("{:?}", event),
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('c'),
-                    modifiers: KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press,
-                    state: KeyEventState::NONE,
-                }) => {
-                    disable_raw_mode().unwrap();
-                    exit(0);
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('w'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.linear.x = linear_speed;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('s'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.linear.x = -linear_speed;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('a'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.angular.z = angular_speed;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Press,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.angular.z = -angular_speed;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('w'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Release,
-                    state: KeyEventState::NONE,
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('s'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Release,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.linear.x = 0.0;
-                }
-                Event::Key(KeyEvent {
-                    code: KeyCode::Char('a'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Release,
-                    state: KeyEventState::NONE,
-                })
-                | Event::Key(KeyEvent {
-                    code: KeyCode::Char('d'),
-                    modifiers: KeyModifiers::NONE,
-                    kind: KeyEventKind::Release,
-                    state: KeyEventState::NONE,
-                }) => {
-                    vel_msg.angular.z = 0.0;
-                }
-                Event::FocusGained => println!("FocusGained"),
-                Event::FocusLost => println!("FocusLost"),
-                Event::Key(event) => println!("{:?}", event),
-                Event::Mouse(event) => println!("{:?}", event),
-                #[cfg(feature = "bracketed-paste")]
-                Event::Paste(data) => println!("Pasted {:?}", data),
-                Event::Resize(width, height) => println!("New size {}x{}", width, height),
-                Event::Paste(_) => {}
-            }
-        } else {
-            // Timeout expired and no `Event` is available
-        }
+        let mut delay = Delay::new(Duration::from_millis(100)).fuse();
+        let mut event = reader.next().fuse();
 
-        /* match read().unwrap() {
-            Event::Key(KeyEvent {
+        let mut vel_msg = Twist::default();
 
-                code: KeyCode::Char('c'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }) => {
-                disable_raw_mode().unwrap();
-                exit(0);
+        select! {
+            maybe_event = event => {
+                match maybe_event {
+                    Some(Ok(event)) => {
+                        match event {
+                            Event::Key(KeyEvent {
+                                code: KeyCode::Char('c'),
+                                modifiers: KeyModifiers::CONTROL,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            }) => break,
+                            Event::Key(KeyEvent {
+                                code: KeyCode::Char('w'),
+                                modifiers: KeyModifiers::NONE,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            }) => {
+                                vel_msg.linear.x = linear_speed;
+                            }
+                            Event::Key(KeyEvent {
+                                code: KeyCode::Char('s'),
+                                modifiers: KeyModifiers::NONE,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            }) => {
+                                vel_msg.linear.x = -linear_speed;
+                            }
+                            Event::Key(KeyEvent {
+                                code: KeyCode::Char('a'),
+                                modifiers: KeyModifiers::NONE,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            }) => {
+                                vel_msg.angular.z = angular_speed;
+                            }
+                            Event::Key(KeyEvent {
+                                code: KeyCode::Char('d'),
+                                modifiers: KeyModifiers::NONE,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            }) => {
+                                vel_msg.angular.z = -angular_speed;
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Err(e)) => println!("Error: {:?}\r", e),
+                    None => break,
+                }
             }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }) => {
-                vel_msg.linear.x = linear_speed;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('s'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }) => {
-                vel_msg.linear.x = -linear_speed;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('a'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }) => {
-                vel_msg.angular.z = -angular_speed;
-            }
-            Event::Key(KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::NONE,
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            }) => {
-                vel_msg.angular.z = angular_speed;
-            }
-            Event::FocusGained => println!("FocusGained"),
-            Event::FocusLost => println!("FocusLost"),
-            Event::Key(event) => println!("{:?}", event),
-            Event::Mouse(event) => println!("{:?}", event),
-            #[cfg(feature = "bracketed-paste")]
-            Event::Paste(data) => println!("Pasted {:?}", data),
-            Event::Resize(width, height) => println!("New size {}x{}", width, height),
-            Event::Paste(_) => {
-                vel_msg = Twist::default();
-            }
-        } */
+            _ = delay => {},
+        };
 
         cmd_vel_pub.send(vel_msg.clone()).unwrap();
-
-        // `poll()` waits for an `Event` for a given time period
-        /* if poll(Duration::from_millis(500)).unwrap() {
-            // It's guaranteed that the `read()` won't block when the `poll()`
-            // function returns `true`
-            match read().unwrap() {
-                Event::FocusGained => println!("FocusGained"),
-                Event::FocusLost => println!("FocusLost"),
-                Event::Key(event) => println!("{:?}", event),
-                Event::Mouse(event) => println!("{:?}", event),
-                #[cfg(feature = "bracketed-paste")]
-                Event::Paste(data) => println!("Pasted {:?}", data),
-                Event::Resize(width, height) => println!("New size {}x{}", width, height),
-                Event::Paste(_) => {}
-            }
-        } else {
-            // Timeout expired and no `Event` is available
-        } */
     }
-
-    //disabling raw mode
-    disable_raw_mode().unwrap();
 }
-
-/* fn main() {
-    env_logger::init();
-
-    // Initialize node
-    rosrust::init("listener");
-
-    // Create subscriber
-    // The subscriber is stopped when the returned object is destroyed
-    let subscriber_info = rosrust::subscribe("chatter", 2, |v: rosrust_msg::std_msgs::String| {
-        // Callback for handling received messages
-        rosrust::ros_info!("Received: {}", v.data);
-    })
-    .unwrap();
-
-    let log_names = rosrust::param("~log_names").unwrap().get().unwrap_or(false);
-
-    if log_names {
-        let rate = rosrust::rate(1.0);
-        while rosrust::is_ok() {
-            rosrust::ros_info!("Publisher uris: {:?}", subscriber_info.publisher_uris());
-            rate.sleep();
-        }
-    } else {
-        // Block the thread until a shutdown signal is received
-        rosrust::spin();
-    }
-} */
